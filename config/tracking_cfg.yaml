@@ -1,0 +1,21 @@
+object_tracking_lidar:
+  ros__parameters:
+    # Maximum number of tracking objects
+    max_tracking_objects: 4
+    # Euclidean clustering parameters
+    cluster_tolerance: 0.30
+    min_cluster_size: 60
+    max_cluster_size: 600
+    # Kalman filter parameters
+    kf_process_noise: 0.01
+    kf_measurement_noise: 0.1
+    # Topic configuration
+    input_topic: "/lidar/points_raw"
+    output_frame: "laser"
+    # Range filter parameters (axis bounds for input point cloud)
+    range_min_x: -5.0
+    range_max_x: 5.0
+    range_min_y: -5.0
+    range_max_y: 5.0
+    range_min_z: -0.1
+    range_max_z: 2.0
