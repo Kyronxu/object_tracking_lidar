@@ -12,6 +12,13 @@ object_tracking_lidar:
     # Topic configuration
     input_topic: "/lidar/points_raw"
     output_frame: "laser"
+    # Self body filter parameters (remove points within robot's own bounding box)
+    self_min_x: -0.7
+    self_max_x: 0.1
+    self_min_y: -0.25
+    self_max_y: 0.25
+    self_min_z: -0.1
+    self_max_z: 0.1
     # Range filter parameters (axis bounds for input point cloud)
     range_min_x: -2.0
     range_max_x: 3.5

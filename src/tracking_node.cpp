@@ -37,10 +37,14 @@ public:
     RCLCPP_INFO(this->get_logger(),
       "ObjectTrackingLidar node initialized | sub: %s | max_objects: %d | "
       "filter: %s | clusterer: %s | associator: %s | tracker: %s | "
+      "self=[x:%.1f~%.1f, y:%.1f~%.1f, z:%.1f~%.1f] | "
       "range=[x:%.1f~%.1f, y:%.1f~%.1f, z:%.1f~%.1f] | voxel=[%.3f, %.3f, %.3f]",
       input_topic_.c_str(), max_objects_,
       filter_->name().c_str(), clusterer_->name().c_str(),
       associator_->name().c_str(), tracker_name_.c_str(),
+      self_params_.min_x, self_params_.max_x,
+      self_params_.min_y, self_params_.max_y,
+      self_params_.min_z, self_params_.max_z,
       range_params_.min_x, range_params_.max_x,
       range_params_.min_y, range_params_.max_y,
       range_params_.min_z, range_params_.max_z,
@@ -59,6 +63,14 @@ private:
     this->declare_parameter<double>("kf_measurement_noise", 0.1);
     this->declare_parameter<std::string>("input_topic", "/lidar/points_raw");
     this->declare_parameter<std::string>("output_frame", "base_link");
+
+    // Self body filter parameters (remove points within robot's own bounding box)
+    this->declare_parameter<double>("self_min_x", -0.7);
+    this->declare_parameter<double>("self_max_x", 0.1);
+    this->declare_parameter<double>("self_min_y", -0.25);
+    this->declare_parameter<double>("self_max_y", 0.25);
+    this->declare_parameter<double>("self_min_z", -0.1);
+    this->declare_parameter<double>("self_max_z", 0.1);
 
     // Range filter parameters
     this->declare_parameter<double>("range_min_x", -3.6);
@@ -80,6 +92,14 @@ private:
     max_objects_ = this->get_parameter("max_tracking_objects").as_int();
     input_topic_ = this->get_parameter("input_topic").as_string();
     output_frame_ = this->get_parameter("output_frame").as_string();
+
+    // Self body filter params
+    self_params_.min_x = this->get_parameter("self_min_x").as_double();
+    self_params_.max_x = this->get_parameter("self_max_x").as_double();
+    self_params_.min_y = this->get_parameter("self_min_y").as_double();
+    self_params_.max_y = this->get_parameter("self_max_y").as_double();
+    self_params_.min_z = this->get_parameter("self_min_z").as_double();
+    self_params_.max_z = this->get_parameter("self_max_z").as_double();
 
     // Range filter params
     range_params_.min_x = this->get_parameter("range_min_x").as_double();
@@ -107,8 +127,9 @@ private:
   // ---- Initialize polymorphic components ----
   void initComponents()
   {
-    // Build composite filter pipeline: RangeFilter -> VoxelFilter
+    // Build composite filter pipeline: SelfFilter -> RangeFilter -> VoxelFilter
     auto composite = std::make_unique<CompositeFilter>();
+    composite->addFilter(std::make_unique<SelfFilter>(self_params_));
     composite->addFilter(std::make_unique<RangeFilter>(range_params_));
     composite->addFilter(std::make_unique<VoxelFilter>(voxel_params_));
     filter_ = std::move(composite);
@@ -182,7 +203,7 @@ private:
     marker_pub_->publish(marker_array);
   }
 
-  // ---- Core callback: pipeline = range_filter -> voxel_filter -> cluster -> associate -> track ----
+  // ---- Core callback: pipeline = self_filter -> range_filter -> voxel_filter -> cluster -> associate -> track ----
   void cloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr input)
   {
     auto t_total_start = std::chrono::high_resolution_clock::now();
@@ -206,39 +227,50 @@ private:
     input_cloud->width = input_cloud->points.size();
     input_cloud->height = 1;
     input_cloud->is_dense = true;
-    auto t1 = std::chrono::high_resolution_clock::now();
+    // auto t1 = std::chrono::high_resolution_clock::now();
 
-    // Step 2: Range filter (first stage of composite pipeline)
+    // Step 2: Self body filter (first stage - remove robot's own point cloud)
     size_t pre_filter_size = input_cloud->points.size();
     auto * composite = dynamic_cast<CompositeFilter *>(filter_.get());
-    if (composite && composite->filterCount() >= 2) {
-      input_cloud = composite->filterStage(0, input_cloud);  // RangeFilter
+    if (composite && composite->filterCount() >= 3) {
+      input_cloud = composite->filterStage(0, input_cloud);  // SelfFilter
     } else {
       input_cloud = filter_->filter(input_cloud);
     }
 
     if (input_cloud->points.empty()) {
-      RCLCPP_DEBUG(this->get_logger(), "Point cloud empty after range filter (was %zu points)", pre_filter_size);
+      RCLCPP_DEBUG(this->get_logger(), "Point cloud empty after self filter (was %zu points)", pre_filter_size);
+      return;
+    }
+    size_t after_self = input_cloud->points.size();
+    // auto t2 = std::chrono::high_resolution_clock::now();
+
+    // Step 3: Range filter (second stage of composite pipeline)
+    if (composite && composite->filterCount() >= 3) {
+      input_cloud = composite->filterStage(1, input_cloud);  // RangeFilter
+    }
+    if (input_cloud->points.empty()) {
+      RCLCPP_DEBUG(this->get_logger(), "Point cloud empty after range filter (was %zu points)", after_self);
       return;
     }
     size_t after_range = input_cloud->points.size();
-    auto t2 = std::chrono::high_resolution_clock::now();
+    // auto t3 = std::chrono::high_resolution_clock::now();
 
-    // Step 3: Voxel downsample (second stage of composite pipeline)
-    if (composite && composite->filterCount() >= 2) {
-      input_cloud = composite->filterStage(1, input_cloud);  // VoxelFilter
+    // Step 4: Voxel downsample (third stage of composite pipeline)
+    if (composite && composite->filterCount() >= 3) {
+      input_cloud = composite->filterStage(2, input_cloud);  // VoxelFilter
     }
     if (input_cloud->points.empty()) {
       RCLCPP_DEBUG(this->get_logger(), "Point cloud empty after voxel filter (was %zu points)", after_range);
       return;
     }
     size_t after_voxel = input_cloud->points.size();
-    auto t3 = std::chrono::high_resolution_clock::now();
+    auto t4 = std::chrono::high_resolution_clock::now();
 
-    RCLCPP_DEBUG(this->get_logger(), "Filter: %zu(raw) -> %zu(range) -> %zu(voxel)",
-      pre_filter_size, after_range, after_voxel);
+    RCLCPP_DEBUG(this->get_logger(), "Filter: %zu(raw) -> %zu(self) -> %zu(range) -> %zu(voxel)",
+      pre_filter_size, after_self, after_range, after_voxel);
 
-    // Step 4: Cluster the filtered point cloud (polymorphic)
+    // Step 5: Cluster the filtered point cloud (polymorphic)
     auto cluster_results = clusterer_->cluster(input_cloud);
     RCLCPP_DEBUG(this->get_logger(), "%s detected %zu clusters",
       clusterer_->name().c_str(), cluster_results.size());
@@ -256,9 +288,9 @@ private:
     if (static_cast<int>(cluster_results.size()) > max_objects_) {
       cluster_results.resize(max_objects_);
     }
-    auto t4 = std::chrono::high_resolution_clock::now();
+    auto t5 = std::chrono::high_resolution_clock::now();
 
-    // Step 5: First frame - initialize trackers
+    // Step 6: First frame - initialize trackers
     if (first_frame_) {
       for (int i = 0; i < max_objects_; i++) {
         geometry_msgs::msg::Point pos;
@@ -270,20 +302,20 @@ private:
       first_frame_ = false;
 
       RCLCPP_INFO(this->get_logger(),
-        "First frame: initialized %d %s trackers, detected %zu clusters (points: %zu -> %zu -> %zu)",
+        "First frame: initialized %d %s trackers, detected %zu clusters (points: %zu -> %zu -> %zu -> %zu)",
         max_objects_, tracker_name_.c_str(), cluster_results.size(),
-        pre_filter_size, after_range, after_voxel);
+        pre_filter_size, after_self, after_range, after_voxel);
       return;
     }
 
-    // Step 6: Predict next state for all trackers (polymorphic)
+    // Step 7: Predict next state for all trackers (polymorphic)
     std::vector<geometry_msgs::msg::Point> predictions;
     for (int i = 0; i < max_objects_; i++) {
       predictions.push_back(trackers_[i]->predict());
     }
-    auto t5 = std::chrono::high_resolution_clock::now();
+    // auto t6 = std::chrono::high_resolution_clock::now();
 
-    // Step 7: Build cluster measurement list
+    // Step 8: Build cluster measurement list
     std::vector<geometry_msgs::msg::Point> measurements;
     for (int i = 0; i < max_objects_; i++) {
       geometry_msgs::msg::Point pt;
@@ -293,20 +325,20 @@ private:
       measurements.push_back(pt);
     }
 
-    // Step 8: Data association (polymorphic)
+    // Step 9: Data association (polymorphic)
     auto association = associator_->associate(predictions, measurements);
 
-    // Step 9: Publish visualization markers at predicted positions
+    // Step 10: Publish visualization markers at predicted positions
     publishMarkers(predictions);
 
-    // Step 10: Publish object IDs
+    // Step 11: Publish object IDs
     std_msgs::msg::Int32MultiArray obj_id_msg;
     for (int i = 0; i < max_objects_; i++) {
       obj_id_msg.data.push_back(association.obj_id[i]);
     }
     obj_id_pub_->publish(obj_id_msg);
 
-    // Step 11: Update trackers with associated measurements (polymorphic)
+    // Step 12: Update trackers with associated measurements (polymorphic)
     for (int i = 0; i < max_objects_; i++) {
       int cluster_idx = association.obj_id[i];
       if (cluster_idx >= 0 && cluster_idx < static_cast<int>(measurements.size())) {
@@ -314,28 +346,25 @@ private:
       }
     }
 
-    // Step 12: Publish per-cluster point clouds
+    // Step 13: Publish per-cluster point clouds
     for (int i = 0; i < max_objects_; i++) {
       int cluster_idx = association.obj_id[i];
       if (cluster_idx >= 0 && cluster_idx < static_cast<int>(cluster_results.size())) {
         publishCloud(cluster_pubs_[i], cluster_results[cluster_idx].cloud);
       }
     }
-    auto t6 = std::chrono::high_resolution_clock::now();
+    auto t7 = std::chrono::high_resolution_clock::now();
 
-    // Compute and log timing for each pipeline stage
-    double ms_preprocess = std::chrono::duration<double, std::milli>(t1 - t0).count();
-    double ms_range      = std::chrono::duration<double, std::milli>(t2 - t1).count();
-    double ms_voxel      = std::chrono::duration<double, std::milli>(t3 - t2).count();
-    double ms_cluster    = std::chrono::duration<double, std::milli>(t4 - t3).count();
-    double ms_predict    = std::chrono::duration<double, std::milli>(t5 - t4).count();
-    double ms_assoc_upd  = std::chrono::duration<double, std::milli>(t6 - t5).count();
-    double ms_total      = std::chrono::duration<double, std::milli>(t6 - t_total_start).count();
+    // Compute and log timing (4 parts)
+    double ms_filter     = std::chrono::duration<double, std::milli>(t4 - t0).count();
+    double ms_cluster    = std::chrono::duration<double, std::milli>(t5 - t4).count();
+    double ms_kf         = std::chrono::duration<double, std::milli>(t7 - t5).count();
+    double ms_total      = std::chrono::duration<double, std::milli>(t7 - t_total_start).count();
 
     RCLCPP_INFO(this->get_logger(),
-      "[Timing] total: %.2f ms | preprocess: %.2f | range: %.2f | voxel: %.2f | cluster: %.2f | predict: %.2f | assoc+update: %.2f | pts: %zu->%zu->%zu",
-      ms_total, ms_preprocess, ms_range, ms_voxel, ms_cluster, ms_predict, ms_assoc_upd,
-      pre_filter_size, after_range, after_voxel);
+      "[Timing] total: %.2f ms | filter: %.2f | cluster: %.2f | kalman: %.2f | pts: %zu->%zu",
+      ms_total, ms_filter, ms_cluster, ms_kf,
+      pre_filter_size, after_voxel);
   }
 
   // ---- Member variables ----
@@ -343,6 +372,7 @@ private:
   int max_objects_;
   std::string input_topic_;
   std::string output_frame_;
+  SelfFilter::Params self_params_;
   RangeFilter::Params range_params_;
   VoxelFilter::Params voxel_params_;
   EuclideanClusterer::Params cluster_params_;

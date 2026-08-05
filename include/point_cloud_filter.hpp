@@ -110,6 +110,53 @@ private:
 };
 
 // ============================================================================
+// Self body filter: removes points within the robot's own bounding box
+// Prevents the robot's own structure from being treated as obstacles
+// Inspired by the in_robot_frame check in lidar_tracker.hpp
+// ============================================================================
+class SelfFilter : public PointCloudFilter
+{
+public:
+  struct Params
+  {
+    double min_x = -0.7;   // 后方排除范围 (x轴负方向)
+    double max_x = 0.1;    // 前方排除范围 (x轴正方向)
+    double min_y = -0.25;  // 右侧排除范围 (y轴负方向)
+    double max_y = 0.25;   // 左侧排除范围 (y轴正方向)
+    double min_z = -0.1;   // 下方排除范围 (z轴负方向)
+    double max_z = 0.1;    // 上方排除范围 (z轴正方向)
+  };
+
+  explicit SelfFilter(const Params & params) : params_(params) {}
+
+  pcl::PointCloud<pcl::PointXYZ>::Ptr filter(
+    const pcl::PointCloud<pcl::PointXYZ>::Ptr & cloud) override
+  {
+    pcl::PointCloud<pcl::PointXYZ>::Ptr filtered(new pcl::PointCloud<pcl::PointXYZ>);
+    for (const auto & pt : cloud->points) {
+      // 落在机器人本体包围盒内的点予以滤除
+      if (pt.x >= params_.min_x && pt.x <= params_.max_x &&
+          pt.y >= params_.min_y && pt.y <= params_.max_y &&
+          pt.z >= params_.min_z && pt.z <= params_.max_z) {
+        continue;
+      }
+      filtered->points.push_back(pt);
+    }
+    filtered->width = filtered->points.size();
+    filtered->height = 1;
+    filtered->is_dense = true;
+    return filtered;
+  }
+
+  std::string name() const override { return "SelfFilter"; }
+
+  const Params & params() const { return params_; }
+
+private:
+  Params params_;
+};
+
+// ============================================================================
 // Composite filter: chains multiple PointCloudFilter instances sequentially
 // Filters are applied in the order they are added
 // ============================================================================
