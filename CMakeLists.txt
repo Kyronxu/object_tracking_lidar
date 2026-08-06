@@ -16,6 +16,9 @@ find_package(sensor_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(visualization_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
+find_package(tf2 REQUIRED)
+find_package(tf2_ros REQUIRED)
+find_package(tf2_geometry_msgs REQUIRED)
 find_package(OpenCV REQUIRED)
 find_package(PCL REQUIRED COMPONENTS common segmentation filters search)
 find_package(pcl_conversions REQUIRED)
@@ -38,6 +41,9 @@ ament_target_dependencies(tracking_node PUBLIC
   geometry_msgs
   visualization_msgs
   std_msgs
+  tf2
+  tf2_ros
+  tf2_geometry_msgs
   pcl_conversions
   # pcl_ros
 )

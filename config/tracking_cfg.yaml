@@ -1,24 +1,53 @@
 object_tracking_lidar:
   ros__parameters:
-    # Maximum number of tracking objects
+    # Maximum number of tracking objects (for multi-object tracking pipeline)
     max_tracking_objects: 6
     # Euclidean clustering parameters
     cluster_tolerance: 0.20
-    min_cluster_size: 30
+    min_cluster_size: 20
     max_cluster_size: 400
-    # Kalman filter parameters
+    # Kalman filter parameters (for multi-object tracker)
     kf_process_noise: 0.01
-    kf_measurement_noise: 0.1
+    kf_measurement_noise: 0.01
+    # Acceleration noise for dt-based process noise (piecewise white noise jerk model)
+    kf_acceleration_noise: 2.0
     # Topic configuration
     input_topic: "/lidar/points_raw"
+    # Output frame: transform fused results back to base_link for downstream use
     output_frame: "base_link"
+    # Tracking frame: use odom to avoid tracking drift caused by base_link rotation
+    tracking_frame: "odom"
+    # TF2 configuration
+    tf_timeout_s: 0.20
+    # UWB-LiDAR fusion configuration
+    uwb_topic: "/uwb/target_position"
+    # Fused output topic name (configurable)
+    fused_output_topic: "/uwb/target_position_fused"
+    uwb_fusion_distance_threshold: 0.45
+    # Fusion tracker variances (m²): UWB σ=0.5m, LiDAR σ=0.15m
+    uwb_variance: 0.36
+    lidar_variance: 0.0225
+    acceleration_variance: 2.0
+    # 99% chi-square gate for 2D Mahalanobis distance
+    mahalanobis_gate_squared: 9.21
+    # Maximum fusion velocity (m/s), clamp to prevent runaway state drift
+    max_fusion_velocity: 3.0
+    # Reinitialize fusion tracker after N consecutive Mahalanobis rejections
+    max_rejected_updates: 5
+    # Confirmation frames before accepting LiDAR cluster
+    confirmation_frames: 3
+    confirmation_distance_m: 0.35
+    # Reset fusion tracker if no measurement for this duration
+    track_reset_timeout_s: 1.0
+    # Visualization markers switch
+    enable_markers: false
     # Range filter parameters (axis bounds for input point cloud)
     range_min_x: -2.0
-    range_max_x: 3.5
+    range_max_x: 3.0
     range_min_y: -2.0
-    range_max_y: 2.0
+    range_max_y: 3.0
     range_min_z: -0.1
-    range_max_z: 2.5
+    range_max_z: 2.2
     # Voxel downsample filter parameters (leaf size in meters)
     voxel_size_x: 0.1
     voxel_size_y: 0.1
